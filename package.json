@@ -9,12 +9,17 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@langchain/google-genai": "^2.1.30",
+    "better-sqlite3": "^12.10.0",
+    "langchain": "^1.4.0",
+    "neo4j-driver": "^6.0.1",
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
