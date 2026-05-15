@@ -28,11 +28,16 @@ export async function POST(request: Request) {
 
     // 4. Invocar la ejecución del agente cognitivo
     const agentOutput = await generarEjecutarAgente(message, formattedHistory);
-
-    // Evaluar y formatear la salida del guardrail fuera de dominio
+   
+    // Evaluar y formatear salidas controladas de los Guardrails
     let finalPayloadText = agentOutput;
+
     if (agentOutput === 'FUERA_DE_DOMINIO') {
-      finalPayloadText = 'Lo siento, mi base de conocimientos está estrictamente limitada a consultas analíticas sobre publicaciones científicas, autores de Inteligencia Artificial, e instituciones académicas registradas.';
+        finalPayloadText = 'Lo siento, mi base de conocimientos está estrictamente limitada a consultas analíticas sobre publicaciones científicas, autores e instituciones de IA.';
+    } else if (agentOutput === 'SEGURIDAD_BLOQUEADO') {
+        finalPayloadText = 'Acción bloqueada. Se ha detectado una instrucción no autorizada que viola las políticas de seguridad del sistema.';
+    } else if (agentOutput === 'CYPHER_BLOQUEADO') {
+        finalPayloadText = 'Seguridad: La consulta generada contenía comandos de escritura o modificación no permitidos para usuarios de lectura.';
     }
 
     // 5. Registrar la respuesta final en local para mantener consistencia en el historial

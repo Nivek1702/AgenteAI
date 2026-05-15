@@ -4,54 +4,87 @@ import { getGrafo, runCypher } from "./neo4j";
 const llm = new ChatGoogleGenerativeAI({
   model: "gemini-2.5-flash",
   temperature: 0.0,
-  apiKey: process.env.GOOGLE_API_KEY,
 });
 
+function detectarPromptInjection(input: string): boolean {
+  const patronesMaliciosos = [
+    /ignora las instrucciones/i,
+    /ignore previous instructions/i,
+    /jailbreak/i,
+    /actúa como/i,
+    /eres un/i
+  ];
+  return patronesMaliciosos.some(patron => patron.test(input));
+}
+
+function validarSeguridadCypher(query: string): boolean {
+  const blacklist = [
+    /\bCREATE\b/i, /\bMERGE\b/i, /\bDELETE\b/i, /\bDETACH\b/i, 
+    /\bSET\b/i, /\bREMOVE\b/i, /\bDROP\b/i, /\bLOAD\b/i, /\bCALL\b/i
+  ];
+  return !blacklist.some(patron => patron.test(query));
+}
+
 export async function generarEjecutarAgente(question: string, historyText: string): Promise<string> {
+  if (detectarPromptInjection(question)) {
+    return "SEGURIDAD_BLOQUEADO";
+  }
+
   const schema = await getGrafo();
 
   const cypherPrompt = `
   Eres un traductor estricto de Lenguaje Natural a código de bases de datos Neo4j Cypher.
-  Utiliza únicamente el siguiente esquema mapeado del sistema:
+  Utiliza únicamente el siguiente esquema del sistema:
   ${schema}
 
-  Reglas mandatorias de control:
-  1. Genera única y exclusivamente consultas de LECTURA (usando MATCH y RETURN). Está prohibido usar palabras de modificación como CREATE, MERGE, SET, DELETE, REMOVE o DROP.
-  2. Si la pregunta del usuario no tiene ninguna relación temática con el grafo de publicaciones científicas, autores, áreas de IA o universidades, debes responder única y exclusivamente con la palabra exacta: FUERA_DE_DOMINIO.
-  3. Devuelve únicamente el string limpio de la consulta Cypher. No agregues formatos de markdown como \`\`\`cypher, ni texto aclaratorio.
-
-  Historial reciente del chat:
-  ${historyText}
-
-  Pregunta del usuario: ${question}
+  Reglas mandatorias:
+  1. Genera consultas estrictas de LECTURA (MATCH y RETURN).
+  2. Si la pregunta no pertenece al dominio de papers, autores o IA, responde únicamente: FUERA_DE_DOMINIO.
+  3. Devuelve solo el string de texto limpio del query Cypher. Sin markdown.
+  
+  Historial: ${historyText}
+  Pregunta: ${question}
   Resultado:`;
 
-  const response = await llm.invoke(cypherPrompt);
-  const cleanCypher = (response.content as string).trim();
+  let response = await llm.invoke(cypherPrompt);
+  let cleanCypher = (response.content as string).trim();
 
-  if (cleanCypher.includes("FUERA_DE_DOMINIO")) {
-    return "FUERA_DE_DOMINIO";
+  if (cleanCypher.includes("FUERA_DE_DOMINIO")) return "FUERA_DE_DOMINIO";
+
+  if (!validarSeguridadCypher(cleanCypher)) {
+    return "CYPHER_BLOQUEADO";
   }
 
+  let rawGraphData;
   try {
-    const rawGraphData = await runCypher(cleanCypher);
-    const synthesisPrompt = `
-    Eres un asistente académico experto. Tu tarea es responder la duda del usuario interpretando los datos estructurados que se extrajeron del grafo de Neo4j.
+    rawGraphData = await runCypher(cleanCypher);
+  } catch (firstError: any) {
+    console.warn("Error en Intento 1. Iniciando auto-corrección...", firstError.message);
+    const retryPrompt = `
+    La consulta Cypher que generaste previamente lanzó un error en Neo4j.
+    Query incorrecto: \`${cleanCypher}\`
+    Error del motor: ${firstError.message}
+    Esquema permitido: ${schema}
 
-    Pregunta del usuario: ${question}
-    Datos del grafo recuperados: ${JSON.stringify(rawGraphData)}
+    Corrige la consulta Cypher para que sea válida sintácticamente y devuelva los datos correctos. Cumple las mismas reglas anteriores (solo lectura, sin markdown).
+    Consulta corregida:`;
 
-    Instrucciones de formato:
-    - Responde amigablemente en español fluido.
-    - SI LOS DATOS CONTIENEN MÚLTIPLES ELEMENTOS (como una lista de palabras clave, autores o títulos), organízalos obligatoriamente en una lista con viñetas (usando guiones de la forma "- Elemento") colocando cada uno en una línea nueva. Está prohibido ponerlos seguidos en un solo párrafo.
-    - Si el conjunto de datos recuperados viene vacío ([]), indícale al usuario con cortesía que no cuentas con registros específicos que coincidan con esos criterios de búsqueda en el sistema.
-    `;
-    const finalAnswer = await llm.invoke(synthesisPrompt);
+    const retryResponse = await llm.invoke(retryPrompt);
+    cleanCypher = (retryResponse.content as string).trim();
 
-    return finalAnswer.content as string;
+    if (!validarSeguridadCypher(cleanCypher)) return "CYPHER_BLOQUEADO";
 
-  } catch (error) {
-    console.error("Fallo de ejecución Cypher:", cleanCypher, error);
-    return "Lo siento, experimenté una inconsistencia al procesar la lógica de la consulta interna. Por favor, intenta estructurar tu pregunta de otra forma.";
+    rawGraphData = await runCypher(cleanCypher);
   }
+
+  const synthesisPrompt = `
+  Eres un asistente académico experto. Responde al usuario interpretando estos datos estructurados del grafo de Neo4j.
+  Pregunta: ${question}
+  Datos del grafo: ${JSON.stringify(rawGraphData)}
+  
+  Formatos: Responde amigablemente en español. Si está vacío ([]), notifícalo con cortesía. Usa listas si hay muchos elementos.
+  `;
+
+  const finalAnswer = await llm.invoke(synthesisPrompt);
+  return finalAnswer.content as string;
 }
