@@ -7,7 +7,7 @@ const llm = new ChatGoogleGenerativeAI({
   apiKey: process.env.GOOGLE_API_KEY,
 });
 
-export async function generarEjecutarAgent(question: string, historyText: string): Promise<string> {
+export async function generarEjecutarAgente(question: string, historyText: string): Promise<string> {
   const schema = await getGrafo();
 
   const cypherPrompt = `
